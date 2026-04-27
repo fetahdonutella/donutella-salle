@@ -1,7 +1,10 @@
-export type ItemName = "Shawarma" | "Tacos" | "Box";
-
-export type PriceMap = Record<ItemName, number>;
+export type ItemName = string;
 export type QuantityMap = Record<ItemName, number>;
+export type StoreItem = {
+  id: string;
+  name: ItemName;
+  price: number;
+};
 
 export type SalesEntry = {
   id: string;
@@ -18,23 +21,27 @@ export type ExpenseEntry = {
   createdAt: string;
 };
 
-export const PRICES: PriceMap = {
-  Shawarma: 300,
-  Tacos: 350,
-  Box: 350,
+export type ClosedPeriodEntry = {
+  id: string;
+  closedAt: string;
+  salesCount: number;
+  expenseCount: number;
+  totalSales: number;
+  totalExpenses: number;
+  netProfit: number;
 };
-export const ITEM_NAMES: ItemName[] = ["Shawarma", "Tacos", "Box"];
 
-export const EMPTY_QUANTITIES: QuantityMap = {
-  Shawarma: 0,
-  Tacos: 0,
-  Box: 0,
-};
+export const DEFAULT_ITEMS: StoreItem[] = [
+  { id: "shawarma", name: "Shawarma", price: 300 },
+  { id: "tacos", name: "Tacos", price: 350 },
+  { id: "box", name: "Box", price: 350 },
+];
 
 export const SALES_HISTORY_KEY = "store-sales-history";
 export const PENDING_QUANTITIES_KEY = "store-quantities";
 export const EXPENSES_KEY = "store-expenses";
-export const STORE_DATA_UPDATED_EVENT = "store-data-updated";
+export const CLOSED_PERIODS_KEY = "store-closed-periods";
+export const ITEMS_KEY = "store-items";
 
 export const parseJSON = <T,>(raw: string | null, fallback: T): T => {
   if (!raw) {
@@ -62,5 +69,13 @@ export const writeStorage = <T,>(key: string, value: T) => {
     return;
   }
   localStorage.setItem(key, JSON.stringify(value));
-  window.dispatchEvent(new Event(STORE_DATA_UPDATED_EVENT));
 };
+
+export const createId = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+export const createEmptyQuantities = (items: StoreItem[] = DEFAULT_ITEMS): QuantityMap =>
+  items.reduce<QuantityMap>((acc, item) => {
+    acc[item.name] = 0;
+    return acc;
+  }, {});

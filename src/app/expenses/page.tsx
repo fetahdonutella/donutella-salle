@@ -4,23 +4,32 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import BottomNav from "@/components/BottomNav";
 import StatCard from "@/components/ui/StatCard";
 import {
+  createEmptyQuantities,
+  ClosedPeriodEntry,
   ExpenseEntry,
-  EXPENSES_KEY,
   formatDate,
   formatDA,
-  SALES_HISTORY_KEY,
   SalesEntry,
-  STORE_DATA_UPDATED_EVENT,
-  readStorage,
-  writeStorage,
 } from "@/lib/store-data";
+import {
+  buildClosedPeriodEntry,
+  buildExpenseEntry,
+  getClosedPeriods,
+  getExpenses,
+  getItems,
+  getSalesHistory,
+  saveClosedPeriods,
+  saveExpenses,
+  savePendingQuantities,
+  saveSalesHistory,
+} from "@/lib/store-service";
 
 const getInitialExpenses = (): ExpenseEntry[] => {
-  return readStorage<ExpenseEntry[]>(EXPENSES_KEY, []);
+  return getExpenses();
 };
 
 const getSavedSales = (): SalesEntry[] => {
-  return readStorage<SalesEntry[]>(SALES_HISTORY_KEY, []);
+  return getSalesHistory();
 };
 
 export default function ExpensesPage() {
@@ -28,24 +37,16 @@ export default function ExpensesPage() {
   const [amount, setAmount] = useState("");
   const [expenses, setExpenses] = useState<ExpenseEntry[]>(getInitialExpenses);
   const [salesHistory, setSalesHistory] = useState<SalesEntry[]>(getSavedSales);
+  const [closedPeriods, setClosedPeriods] =
+    useState<ClosedPeriodEntry[]>(getClosedPeriods);
 
   useEffect(() => {
-    writeStorage(EXPENSES_KEY, expenses);
+    saveExpenses(expenses);
   }, [expenses]);
 
   useEffect(() => {
-    const syncSales = () => {
-      setSalesHistory(getSavedSales());
-    };
-
-    window.addEventListener("storage", syncSales);
-    window.addEventListener(STORE_DATA_UPDATED_EVENT, syncSales);
-    syncSales();
-    return () => {
-      window.removeEventListener("storage", syncSales);
-      window.removeEventListener(STORE_DATA_UPDATED_EVENT, syncSales);
-    };
-  }, []);
+    saveClosedPeriods(closedPeriods);
+  }, [closedPeriods]);
 
   const totalExpenses = useMemo(
     () => expenses.reduce((sum, expense) => sum + expense.amount, 0),
@@ -67,12 +68,7 @@ export default function ExpensesPage() {
       return;
     }
 
-    const newEntry: ExpenseEntry = {
-      id: `${Date.now()}`,
-      title: title.trim(),
-      amount: numericAmount,
-      createdAt: new Date().toISOString(),
-    };
+    const newEntry = buildExpenseEntry(title, numericAmount);
 
     setExpenses((prev) => [newEntry, ...prev]);
     setTitle("");
@@ -81,6 +77,32 @@ export default function ExpensesPage() {
 
   const handleDeleteExpense = (expenseId: string) => {
     setExpenses((prev) => prev.filter((entry) => entry.id !== expenseId));
+  };
+
+  const handleClosePeriod = () => {
+    if (salesHistory.length === 0 && expenses.length === 0) {
+      return;
+    }
+    const shouldClose = window.confirm(
+      "Close this period and start fresh? Current sales and expenses will move to period history.",
+    );
+    if (!shouldClose) {
+      return;
+    }
+
+    const snapshot = buildClosedPeriodEntry(
+      salesHistory,
+      expenses,
+      totalSales,
+      totalExpenses,
+    );
+
+    setClosedPeriods((prev) => [snapshot, ...prev]);
+    saveSalesHistory([]);
+    saveExpenses([]);
+    savePendingQuantities(createEmptyQuantities(getItems()));
+    setSalesHistory([]);
+    setExpenses([]);
   };
 
   return (
@@ -129,6 +151,21 @@ export default function ExpensesPage() {
         </section>
 
         <section className="rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm sm:p-6">
+          <h2 className="text-lg font-semibold">Period Actions</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Close current period and start fresh. Old numbers stay in history.
+          </p>
+          <button
+            type="button"
+            onClick={handleClosePeriod}
+            disabled={salesHistory.length === 0 && expenses.length === 0}
+            className="mt-3 w-full rounded-xl bg-amber-500 px-4 py-3 text-base font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Close Period & Start Fresh
+          </button>
+        </section>
+
+        <section className="rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm sm:p-6">
           <h2 className="text-lg font-semibold">Expenses List</h2>
           {expenses.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-500">No expenses yet.</p>
@@ -155,6 +192,36 @@ export default function ExpensesPage() {
                       Delete
                     </button>
                   </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm sm:p-6">
+          <h2 className="text-lg font-semibold">Closed Periods History</h2>
+          {closedPeriods.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-500">No closed periods yet.</p>
+          ) : (
+            <ul className="mt-3 space-y-2">
+              {closedPeriods.map((period) => (
+                <li key={period.id} className="rounded-lg bg-indigo-50 px-3 py-2 text-sm">
+                  <p className="font-semibold text-indigo-900">
+                    Closed: {formatDate(period.closedAt)}
+                  </p>
+                  <p className="text-zinc-700">
+                    Sales: {formatDA(period.totalSales)} ({period.salesCount} entries)
+                  </p>
+                  <p className="text-zinc-700">
+                    Expenses: {formatDA(period.totalExpenses)} ({period.expenseCount} entries)
+                  </p>
+                  <p
+                    className={`font-semibold ${
+                      period.netProfit < 0 ? "text-rose-700" : "text-emerald-700"
+                    }`}
+                  >
+                    Profit: {formatDA(period.netProfit)}
+                  </p>
                 </li>
               ))}
             </ul>

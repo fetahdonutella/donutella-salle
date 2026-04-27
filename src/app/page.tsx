@@ -4,55 +4,73 @@ import { useEffect, useMemo, useState } from "react";
 import BottomNav from "@/components/BottomNav";
 import StatCard from "@/components/ui/StatCard";
 import {
-  EMPTY_QUANTITIES,
+  createEmptyQuantities,
   formatDate,
   formatDA,
-  ITEM_NAMES,
-  ItemName,
-  PENDING_QUANTITIES_KEY,
-  PRICES,
   QuantityMap,
-  SALES_HISTORY_KEY,
   SalesEntry,
-  readStorage,
-  writeStorage,
 } from "@/lib/store-data";
+import {
+  applyQuantityDelta,
+  buildSalesEntry,
+  computeDailyHistory,
+  computeSalesTotals,
+  getItems,
+  getPendingQuantities,
+  getSalesHistory,
+  savePendingQuantities,
+  saveSalesHistory,
+} from "@/lib/store-service";
 
 const getInitialQuantities = (): QuantityMap => {
-  return readStorage<QuantityMap>(PENDING_QUANTITIES_KEY, EMPTY_QUANTITIES);
+  return getPendingQuantities();
 };
 
 const getInitialHistory = (): SalesEntry[] => {
-  return readStorage<SalesEntry[]>(SALES_HISTORY_KEY, []);
+  return getSalesHistory();
 };
 
 export default function Home() {
+  const [items] = useState(getItems);
   const [quantities, setQuantities] = useState<QuantityMap>(getInitialQuantities);
   const [history, setHistory] = useState<SalesEntry[]>(getInitialHistory);
+  const [lastAction, setLastAction] = useState<{ item: string; delta: number } | null>(
+    null,
+  );
 
   useEffect(() => {
-    writeStorage(PENDING_QUANTITIES_KEY, quantities);
+    savePendingQuantities(quantities);
   }, [quantities]);
 
   useEffect(() => {
-    writeStorage(SALES_HISTORY_KEY, history);
+    saveSalesHistory(history);
   }, [history]);
 
-  const totalRevenue = useMemo(() => {
-    return ITEM_NAMES.reduce((sum, item) => {
-      return sum + quantities[item] * PRICES[item];
-    }, 0);
-  }, [quantities]);
+  const totals = useMemo(() => computeSalesTotals(quantities, items), [quantities, items]);
+  const { totalRevenue, totalSold } = totals;
 
-  const totalSold = useMemo(() => {
-    return Object.values(quantities).reduce((sum, qty) => sum + qty, 0);
-  }, [quantities]);
+  const handleQuantityChange = (item: string, delta: number) => {
+    setQuantities((prev) => {
+      const next = applyQuantityDelta(prev, item, delta);
+      if (next === prev) {
+        return prev;
+      }
+      return next;
+    });
+    setLastAction({ item, delta });
+  };
 
-  const handleQuantityChange = (item: ItemName, value: number) => {
-    setQuantities((prev) => ({
-      ...prev,
-      [item]: Math.max(0, value),
-    }));
+  const handleClearCounter = () => {
+    setQuantities(createEmptyQuantities(items));
+    setLastAction(null);
+  };
+
+  const handleUndoLastAction = () => {
+    if (!lastAction) {
+      return;
+    }
+    handleQuantityChange(lastAction.item, -lastAction.delta);
+    setLastAction(null);
   };
 
   const handleSaveDay = () => {
@@ -60,51 +78,18 @@ export default function Home() {
       return;
     }
 
-    const entry: SalesEntry = {
-      id: `${Date.now()}`,
-      createdAt: new Date().toISOString(),
-      totalSold,
-      totalRevenue,
-      quantities,
-    };
+    const entry = buildSalesEntry(quantities, totalSold, totalRevenue);
 
     setHistory((prev) => [entry, ...prev]);
-    setQuantities(EMPTY_QUANTITIES);
+    setQuantities(createEmptyQuantities(items));
+    setLastAction(null);
   };
 
   const handleDeleteSale = (saleId: string) => {
     setHistory((prev) => prev.filter((entry) => entry.id !== saleId));
   };
 
-  const dailyHistory = useMemo(() => {
-    const grouped = new Map<
-      string,
-      { dateLabel: string; totalRevenue: number; quantities: QuantityMap }
-    >();
-
-    history.forEach((entry) => {
-      const date = new Date(entry.createdAt);
-      const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-
-      if (!grouped.has(key)) {
-        grouped.set(key, {
-          dateLabel: date.toLocaleDateString(),
-          totalRevenue: 0,
-          quantities: { ...EMPTY_QUANTITIES },
-        });
-      }
-
-      const day = grouped.get(key);
-      if (!day) return;
-
-      day.totalRevenue += entry.totalRevenue;
-      ITEM_NAMES.forEach((item) => {
-        day.quantities[item] += entry.quantities[item];
-      });
-    });
-
-    return Array.from(grouped.values());
-  }, [history]);
+  const dailyHistory = useMemo(() => computeDailyHistory(history, items), [history, items]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-indigo-50 to-white px-4 py-5 pb-24 text-zinc-900">
@@ -112,32 +97,67 @@ export default function Home() {
         <section className="rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm sm:p-6">
           <h1 className="text-xl font-bold sm:text-2xl">Sales</h1>
           <p className="mt-1 text-sm text-zinc-600">
-            Add sold items quickly and save today&apos;s sales.
+            Tap an item card to add +1 quickly. Tap many times for one order.
           </p>
 
           <div className="mt-4 space-y-3 sm:mt-6 sm:space-y-4">
-            {ITEM_NAMES.map((item) => (
-              <div
-                key={item}
-                className="flex items-center justify-between gap-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 sm:p-4"
+            {items.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => handleQuantityChange(item.name, 1)}
+                className="flex w-full items-center justify-between gap-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-left transition hover:bg-indigo-100 sm:p-4"
               >
                 <div>
-                  <p className="font-semibold">{item}</p>
-                  <p className="text-sm text-zinc-500">{formatDA(PRICES[item])}</p>
+                  <p className="font-semibold">{item.name}</p>
+                  <p className="text-sm text-zinc-500">{formatDA(item.price)}</p>
+                  <p className="text-xs font-medium text-indigo-600">Tap card: +1</p>
                 </div>
 
-                <input
-                  type="number"
-                  min={0}
-                  inputMode="numeric"
-                  value={quantities[item]}
-                  onChange={(event) =>
-                    handleQuantityChange(item, Number(event.target.value))
-                  }
-                  className="w-24 rounded-lg border border-indigo-200 bg-white px-3 py-3 text-right text-base"
-                />
-              </div>
+                <div
+                  onClick={(event) => event.stopPropagation()}
+                  className="flex items-center gap-2"
+                >
+                  <button
+                    type="button"
+                    onClick={() => handleQuantityChange(item.name, -1)}
+                    className="h-10 w-10 rounded-lg bg-white text-xl font-bold text-indigo-700 shadow-sm"
+                    aria-label={`Decrease ${item.name}`}
+                  >
+                    -
+                  </button>
+                  <span className="min-w-10 text-center text-lg font-bold text-indigo-900">
+                    {quantities[item.name] ?? 0}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleQuantityChange(item.name, 1)}
+                    className="h-10 w-10 rounded-lg bg-indigo-600 text-xl font-bold text-white shadow-sm"
+                    aria-label={`Increase ${item.name}`}
+                  >
+                    +
+                  </button>
+                </div>
+              </button>
             ))}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleUndoLastAction}
+              className="rounded-xl border border-indigo-200 bg-white px-4 py-3 text-sm font-semibold text-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!lastAction}
+            >
+              Undo Last Tap
+            </button>
+            <button
+              type="button"
+              onClick={handleClearCounter}
+              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700"
+            >
+              Clear Counter
+            </button>
           </div>
 
           <button
@@ -145,7 +165,7 @@ export default function Home() {
             onClick={handleSaveDay}
             className="mt-5 w-full rounded-xl bg-indigo-600 px-4 py-3 text-base font-medium text-white transition hover:bg-indigo-700 sm:mt-6"
           >
-            Save Day
+            Save Order
           </button>
         </section>
 
@@ -154,7 +174,7 @@ export default function Home() {
           <StatCard label="Total revenue" value={formatDA(totalRevenue)} />
 
           <div className="rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm sm:p-6">
-            <h2 className="text-lg font-semibold">Recent Sales</h2>
+            <h2 className="text-lg font-semibold">Orders History</h2>
             {history.length === 0 ? (
               <p className="mt-3 text-sm text-zinc-500">No saved days yet.</p>
             ) : (
@@ -169,10 +189,10 @@ export default function Home() {
                         {formatDate(entry.createdAt)} - {entry.totalSold} items -{" "}
                         {formatDA(entry.totalRevenue)}
                       </p>
-                      <p className="text-xs text-zinc-500">
-                        {ITEM_NAMES.map(
-                          (item) => `${item}: ${entry.quantities[item]}`,
-                        ).join(" | ")}
+                      <p className="mt-1 text-sm font-medium text-indigo-900">
+                        {Object.entries(entry.quantities)
+                          .map(([name, qty]) => `${name}: ${qty}`)
+                          .join(" | ")}
                       </p>
                     </div>
                     <button
@@ -201,8 +221,8 @@ export default function Home() {
                   >
                     <p className="font-semibold text-indigo-900">{day.dateLabel}</p>
                     <p className="text-xs text-zinc-600">
-                      {ITEM_NAMES.map(
-                        (item) => `${item}: ${day.quantities[item]}`,
+                      {Object.entries(day.quantities).map(
+                        ([item, qty]) => `${item}: ${qty}`,
                       ).join(" | ")}
                     </p>
                     <p className="text-xs text-indigo-700">
